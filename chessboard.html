@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Green Checkerboard</title>
+    <style>
+        .jNB0Ic {
+            position: relative;
+        }
+
+        .cer0Bd {
+            border: 1px solid #000; /* Optional: Add a border to the canvas */
+        }
+    </style>
+</head>
+<body>
+    <div jsname="JI3Aqc" class="jNB0Ic">
+        <canvas jsname="UzWXSb" class="cer0Bd" width="600" height="600"></canvas>
+    </div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", function () {
+            var canvas = document.querySelector('.cer0Bd');
+            var context = canvas.getContext('2d');
+            var cellSize = 30; // 設定每個格子的大小
+            var rows = 20;//canvas.height / cellSize;
+            var cols = 20;//canvas.width / cellSize;
+
+            for (var row = 0; row < rows; row++) {
+                for (var col = 0; col < cols; col++) {
+                    // 綠、淺綠相間的格子
+                    var color = (row + col) % 2 === 0 ? '#AAD751' : '#A2D149';
+
+                    // 繪製格子
+                    context.fillStyle = color;
+                    context.fillRect(col * cellSize, row * cellSize, cellSize, cellSize);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
