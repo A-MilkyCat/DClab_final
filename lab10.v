@@ -35,24 +35,15 @@ module lab10(
     );
 
 // Declare system variables
-wire [1:0] btn_level, btn_pressed;
-reg  [1:0] prev_btn_level;
-always @(posedge clk) begin
-  if (~reset_n)
-    prev_btn_level <= 0;
-  else
-    prev_btn_level <= btn_level;
-end
-assign btn_pressed = (btn_level & ~prev_btn_level);
-reg  [31:0] fish_clock, fish2_clock, fish3_clock;
-wire [9:0]  pos, pos2, pos3;
-wire        fish_region, fish2_region, fish3_region ;
+reg  [31:0] snake_x_clock, snake_y_clock;
+wire [9:0]  p_x, p_y;
+wire        snake_region;
 
 // declare SRAM control signals
-wire [16:0] sram_addr, bgram_addr, f2_addr, f3_addr;
-wire [11:0] data_in, data_in2;
-wire [11:0] data_out, background_out, fish2_out, fish3_out;
-wire        sram_we, sram_en, bgram_en;
+wire [16:0] sram_addr;
+wire [11:0] data_in;
+wire [11:0] data_out;
+wire        sram_we, sram_en;
 
 // General VGA control signals
 wire vga_clk;         // 50MHz clock for VGA control
@@ -69,58 +60,21 @@ reg  [11:0] rgb_reg;  // RGB value for the current pixel
 reg  [11:0] rgb_next; // RGB value for the next pixel
   
 // Application-specific VGA signals
-reg  [17:0] pixel_addr, background_addr, pixel2_addr, pixel3_addr;
+reg  [17:0] pixel_addr;
 
-reg [5:0] speedup = 0;
+wire [3:0]  btn_level, btn_pressed;
+reg  [3:0]  prev_btn_level;
+reg x_dir, y_dir, dir;
 // Declare the video buffer size
-localparam VBUF_W = 202; // video buffer width
-localparam VBUF_H = 202; // video buffer height
+localparam VBUF_W = 320; // video buffer width
+localparam VBUF_H = 240; // video buffer height
 
 // Set parameters for the fish images
-localparam FISH_VPOS   = 64; // Vertical location of the fish in the sea image.
-localparam FISH3_VPOS   = 100;
-localparam FISH2_VPOS = 150;
-localparam FISH2_W = 64;
-localparam FISH2_H = 44;
-localparam FISH3_W = 64;
-localparam FISH3_H = 72;
-localparam FISH_W  = 64; // Width of the fish.
-localparam FISH_H  = 32; // Height of the fish.
-reg [17:0] fish_addr[0:7];   // Address array for up to 8 fish images.
-reg [17:0] fish2_addr[0:7];
-reg [17:0] fish3_addr[0:7];
-// Initializes the fish images starting addresses.
-// Note: System Verilog has an easier way to initialize an array,
-//       but we are using Verilog 2001 :(
-initial begin
-  fish_addr[0] = 18'd0;         /* Addr for fish image #1 */
-  fish_addr[1] = FISH_W*FISH_H; /* Addr for fish image #2 */
-  fish_addr[2] = FISH_W*FISH_H*2; /* Addr for fish image #2 */
-  fish_addr[3] = FISH_W*FISH_H*3; /* Addr for fish image #2 */
-  fish_addr[4] = FISH_W*FISH_H*4; /* Addr for fish image #2 */
-  fish_addr[5] = FISH_W*FISH_H*5; /* Addr for fish image #2 */
-  fish_addr[6] = FISH_W*FISH_H*6; /* Addr for fish image #2 */
-  fish_addr[7] = FISH_W*FISH_H*7; /* Addr for fish image #2 */
-end
+localparam SNAKE_W      = 8; // Width of the fish.
+localparam SNAKE_H      = 8; // Height of the fish.
 
-debounce btn_db2(
-  .clk(clk),
-  .btn_input(usr_btn[0]),
-  .btn_output(btn_level[1])
-);
-debounce btn_db1(
-  .clk(clk),
-  .btn_input(usr_btn[1]),
-  .btn_output(btn_level[0])
-);
-initial begin
-  fish2_addr[0] = 18'd0;         /* Addr for fish image #1 */
-  fish2_addr[1] = FISH2_W*FISH2_H; /* Addr for fish image #2 */
-end
-initial begin
-  fish3_addr[0] = 18'd0;         /* Addr for fish image #1 */
-  fish3_addr[1] = FISH3_W*FISH3_H; /* Addr for fish image #2 */
-end
+
+
 // Instiantiate the VGA sync signal generator
 vga_sync vs0(
   .clk(vga_clk), .reset(~reset_n), .oHS(VGA_HSYNC), .oVS(VGA_VSYNC),
@@ -133,42 +87,43 @@ clk_divider#(2) clk_divider0(
   .reset(~reset_n),
   .clk_out(vga_clk)
 );
-always @(posedge clk) begin
-if (~reset_n)
-   speedup = 0;
-  else if (btn_pressed[0] == 1)
-    speedup = speedup + 1;
-  else if (btn_pressed[1] == 1)
-    speedup = speedup - 1;
-end
+
+debounce btn_db0(
+  .clk(clk),
+  .btn_input(usr_btn[0]),
+  .btn_output(btn_level[0])
+);
+
+debounce btn_db1(
+  .clk(clk),
+  .btn_input(usr_btn[1]),
+  .btn_output(btn_level[1])
+);
+
+debounce btn_db2(
+  .clk(clk),
+  .btn_input(usr_btn[2]),
+  .btn_output(btn_level[2])
+);
+
+debounce btn_db3(
+  .clk(clk),
+  .btn_input(usr_btn[3]),
+  .btn_output(btn_level[3])
+);
 // ------------------------------------------------------------------------
 // The following code describes an initialized SRAM memory block that
 // stores a 320x240 12-bit seabed image, plus two 64x32 fish images.
-f3ram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(FISH3_W*FISH3_H*3))
-  ram3 (.clk(clk), .we(sram_we), .en(sram_en),
-          .addr(f3_addr), .data_i(data_in), .data_o(fish3_out));
-          
-fram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(FISH2_W*FISH2_H*2))
-  ram2 (.clk(clk), .we(sram_we), .en(sram_en),
-          .addr(f2_addr), .data_i(data_in), .data_o(fish2_out));
-          
-sram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(FISH_W*FISH_H*8))
+sram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(VBUF_W*VBUF_H))
   ram0 (.clk(clk), .we(sram_we), .en(sram_en),
           .addr(sram_addr), .data_i(data_in), .data_o(data_out));
-bgram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(VBUF_W*VBUF_H))
-  ram1 (.clk(clk), .we(sram_we), .en(bgram_en),                   
-          .addr(bgram_addr), .data_i(data_in2), .data_o(background_out));
-assign sram_we = usr_btn[3]; // In this demo, we do not write the SRAM. However, if
+
+assign sram_we = &usr_btn; // In this demo, we do not write the SRAM. However, if
                              // you set 'sram_we' to 0, Vivado fails to synthesize
                              // ram0 as a BRAM -- this is a bug in Vivado.
 assign sram_en = 1;          // Here, we always enable the SRAM block.
-assign bgram_en = 1;
 assign sram_addr = pixel_addr;
-assign f2_addr = pixel2_addr;
-assign f3_addr = pixel3_addr;
-assign bgram_addr = background_addr;
-assign data_in = 12'h0f0; // SRAM is read-only so we tie inputs to zeros.
-assign data_in2 = 12'h0f0;
+assign data_in = 12'h000; // SRAM is read-only so we tie inputs to zeros.
 // End of the SRAM memory block.
 // ------------------------------------------------------------------------
 
@@ -180,30 +135,67 @@ assign {VGA_RED, VGA_GREEN, VGA_BLUE} = rgb_reg;
 // fish clock is the x position of the fish on the VGA screen.
 // Note that the fish will move one screen pixel every 2^20 clock cycles,
 // or 10.49 msec
-assign pos = fish_clock[31:20]; // the x position of the right edge of the fish image
+integer cnt;
+reg slow_clk;
+always @(posedge clk) begin
+    cnt <= (cnt<49999999)?cnt+1:0;
+    if(cnt==0) slow_clk<=1;
+    else if(cnt==25000000) slow_clk<=0;
+end
+
+always @(posedge clk) begin
+  if (~reset_n)
+    prev_btn_level <= 4'b0000;
+  else
+    prev_btn_level <= btn_level;
+end
+
+assign btn_pressed = (btn_level & ~prev_btn_level);
+
+always @(posedge clk) begin
+  if (~reset_n) begin
+    x_dir <= 0;
+    y_dir <= 0;
+    dir <= 0;
+  end
+  else if(btn_pressed[0] && dir) begin
+    x_dir <= 0;
+    dir <= 0;
+  end
+  else if(btn_pressed[1] && dir)begin
+    x_dir <= 1;
+    dir <= 0;
+  end
+  else if(btn_pressed[2] && !dir)begin
+    y_dir <= 0;
+    dir <= 1;
+  end
+  else if(btn_pressed[3] && !dir)begin
+    y_dir <= 1;
+    dir <= 1;
+  end
+end
+
+assign p_x = snake_x_clock[31:20]; // the x position of the right edge of the fish image
                                 // in the 640x480 VGA screen
-assign pos2 = fish2_clock[31:20];   
+assign p_y = snake_y_clock[31:20]; // the x position of the right edge of the fish image
+                                // in the 640x480 VGA screen
 
-assign pos3 = (VBUF_W + FISH3_W) - fish3_clock[31:20];   
-always @(posedge clk) begin
-  if (~reset_n || fish_clock[31:21] > VBUF_W + FISH_W)
-    fish_clock <= 0;
-  else
-    fish_clock <= fish_clock + 2 + speedup;
+always @(posedge slow_clk) begin
+  if (~reset_n) begin
+    snake_x_clock[31:20] <= 24;
+    snake_y_clock[31:20] <= 120;
+  end
+  else if(dir==0 && x_dir==0)
+    snake_x_clock[31:20] <= (snake_x_clock[31:21]==VBUF_W) ? snake_x_clock[31:20] : snake_x_clock[31:20] + 16;
+  else if(dir==0 && x_dir==1)
+    snake_x_clock[31:20] <= (snake_x_clock[31:21]<SNAKE_W) ? snake_x_clock[31:20] : snake_x_clock[31:20] - 16;
+  else if(dir==1 && y_dir==0)
+    snake_y_clock[31:20] <= (snake_y_clock[31:21]==VBUF_H) ? snake_y_clock[31:20] : snake_y_clock[31:20] + 16;
+  else if(dir==1 && y_dir==1)
+    snake_y_clock[31:20] <= (snake_y_clock[31:21]<SNAKE_H) ? snake_y_clock[31:20] : snake_y_clock[31:20] - 16;
 end
 
-always @(posedge clk) begin
-  if (~reset_n || fish2_clock[31:21] > VBUF_W + FISH2_W)
-    fish2_clock <= 0;
-  else
-    fish2_clock <= fish2_clock + 1 + speedup;
-end
-always @(posedge clk) begin
-  if (~reset_n || fish3_clock[31:21] < 0)
-    fish3_clock[31:21] <= VBUF_W + FISH3_W;
-  else
-    fish3_clock <= fish3_clock + 1 + speedup;
-end
 // End of the animation clock code.
 // ------------------------------------------------------------------------
 
@@ -212,67 +204,22 @@ end
 // Note that the width x height of the fish image is 64x32, when scaled-up
 // on the screen, it becomes 128x64. 'pos' specifies the right edge of the
 // fish image.
-assign fish_region =
-           pixel_y >= (FISH_VPOS<<1) && pixel_y < (FISH_VPOS+FISH_H)<<1 &&
-           (pixel_x + 127) >= pos && pixel_x < pos + 1;
-assign fish2_region =
-           pixel_y >= (FISH2_VPOS<<1) && pixel_y < (FISH2_VPOS+FISH2_H)<<1 &&
-           (pixel_x + 127) >= pos2 && pixel_x < pos2 + 1;
-assign fish3_region =
-           pixel_y >= (FISH3_VPOS<<1) && pixel_y < (FISH3_VPOS+FISH3_H)<<1 &&
-           (pixel_x + 127) >= pos3 && pixel_x < pos3 + 1;
+assign snake_region =
+           pixel_y >= (p_y<<1) && pixel_y < (p_y+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x && pixel_x < p_x + 1;
+
 always @ (posedge clk) begin
   if (~reset_n) begin
     pixel_addr <= 0;
-  end else if (fish_region) begin 
-    pixel_addr <= fish_addr[fish_clock[23]] +
-                  ((pixel_y>>1)-FISH_VPOS)*FISH_W +
-                  ((pixel_x +(FISH_W*2-1)-pos)>>1);
   end
-  else begin
-    // Scale up a 320x240 image for the 640x480 display.
-    // (pixel_x, pixel_y) ranges from (0,0) to (639, 479)
-    pixel_addr <= (pixel_y >> 1) * VBUF_W + (pixel_x >> 1);
-  end
-end
-always @ (posedge clk) begin
-  if (~reset_n) begin
-    pixel2_addr <= 0;
-  end else if (fish2_region) begin 
-    pixel2_addr <= fish2_addr[fish2_clock[23]] +
-                  ((pixel_y>>1)-FISH2_VPOS)*FISH2_W +
-                  ((pixel_x +(FISH2_W*2-1)-pos2)>>1);
-  end
-  else begin
-    // Scale up a 320x240 image for the 640x480 display.
-    // (pixel_x, pixel_y) ranges from (0,0) to (639, 479)
-    pixel2_addr <= (pixel_y >> 1) * VBUF_W + (pixel_x >> 1);
-  end
-end
-always @ (posedge clk) begin
-  if (~reset_n) begin
-    pixel3_addr <= 0;
-  end else if (fish3_region) begin 
-    pixel3_addr <= fish3_addr[fish3_clock[23]] +
-                  ((pixel_y>>1)-FISH3_VPOS)*FISH3_W +
-                  ((pixel_x +(FISH3_W*2-1)-pos3)>>1);
-  end
-  else begin
-    // Scale up a 320x240 image for the 640x480 display.
-    // (pixel_x, pixel_y) ranges from (0,0) to (639, 479)
-    pixel3_addr <= (pixel_y >> 1) * VBUF_W + (pixel_x >> 1);
-  end
-end
-always @ (posedge clk) begin
-  if (~reset_n)
-    background_addr <= 0;
   else
     // Scale up a 320x240 image for the 640x480 display.
     // (pixel_x, pixel_y) ranges from (0,0) to (639, 479)
-    background_addr <= (pixel_y >> 1) * VBUF_W + (pixel_x >> 1);
+    pixel_addr <= (pixel_y >> 1) * VBUF_W + (pixel_x >> 1);
 end
 // End of the AGU code.
 // ------------------------------------------------------------------------
+
 // ------------------------------------------------------------------------
 // Send the video data in the sram to the VGA controller
 always @(posedge clk) begin
@@ -282,18 +229,10 @@ end
 always @(*) begin
   if (~video_on)
     rgb_next = 12'h000; // Synchronization period, must set RGB values to zero.
+  else if(snake_region)
+    rgb_next = 12'h000;
   else
-    if (fish_region) 
-        rgb_next =(data_out == 12'h0f0)?background_out:data_out;
-    else if (fish2_region)
-        if (fish3_region)
-            rgb_next = (fish3_out == 12'h0f0)?(fish2_out == 12'h0f0)?background_out:fish2_out:fish3_out;
-        else
-            rgb_next = (fish2_out == 12'h0f0)?background_out:fish2_out;
-    else if (fish3_region)
-        rgb_next = (fish3_out == 12'h0f0)?background_out:fish3_out;
-    else
-        rgb_next = background_out;
+    rgb_next = data_out; // RGB value at (pixel_x, pixel_y)
 end
 // End of the video data display code.
 // ------------------------------------------------------------------------
