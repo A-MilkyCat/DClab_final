@@ -1,25 +1,3 @@
-`timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: Dept. of Computer Science, National Chiao Tung University
-// Engineer: Chun-Jen Tsai 
-// 
-// Create Date: 2018/12/11 16:04:41
-// Design Name: 
-// Module Name: lab9
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: A circuit that show the animation of a fish swimming in a seabed
-//              scene on a screen through the VGA interface of the Arty I/O card.
-// 
-// Dependencies: vga_sync, clk_divider, sram 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
-
 module lab10(
     input  clk,
     input  reset_n,
@@ -35,9 +13,13 @@ module lab10(
     );
 
 // Declare system variables
-reg  [31:0] snake_x_clock, snake_y_clock;
-wire [9:0]  p_x, p_y;
-wire        snake_region;
+reg  [12:0] snake_x_clock, snake_y_clock;
+reg [9:0]  p_x, p_y;
+reg [9:0]  p_x1, p_y1;
+reg [9:0]  p_x2, p_y2;
+reg [9:0]  p_x3, p_y3;
+reg [9:0]  p_x4, p_y4;
+wire        snake_region, snake_region1, snake_region2, snake_region3, snake_region4;
 
 // declare SRAM control signals
 wire [16:0] sram_addr;
@@ -66,14 +48,19 @@ wire [3:0]  btn_level, btn_pressed;
 reg  [3:0]  prev_btn_level;
 reg x_dir, y_dir, dir;
 // Declare the video buffer size
-localparam VBUF_W = 320; // video buffer width
+localparam VBUF_W = 240; // video buffer width
 localparam VBUF_H = 240; // video buffer height
 
 // Set parameters for the fish images
 localparam SNAKE_W      = 8; // Width of the fish.
 localparam SNAKE_H      = 8; // Height of the fish.
 
-
+reg [2:0] P, P_next;
+localparam [2:0] S_MAIN_INIT = 0, S_MAIN_WAIT = 1, S_MAIN_MOVE = 2, S_MAIN_IDLE = 3, S_MAIN_FINI = 4;
+reg died, start;
+integer cnt;
+reg slow_clk;
+wire hit;
 
 // Instiantiate the VGA sync signal generator
 vga_sync vs0(
@@ -135,8 +122,41 @@ assign {VGA_RED, VGA_GREEN, VGA_BLUE} = rgb_reg;
 // fish clock is the x position of the fish on the VGA screen.
 // Note that the fish will move one screen pixel every 2^20 clock cycles,
 // or 10.49 msec
-integer cnt;
-reg slow_clk;
+// ------------------------------------------------------------------------
+
+always @(posedge clk) begin
+  if (~reset_n) begin
+    P <= S_MAIN_INIT;
+  end
+  else begin
+    P <= P_next;
+  end
+end
+
+always @(*) begin // FSM next-state logic
+  case (P)
+    S_MAIN_INIT:
+        P_next = S_MAIN_WAIT;
+    S_MAIN_WAIT:
+        if(btn_pressed[0]) P_next = S_MAIN_MOVE;
+        else if(btn_pressed[2]) P_next = S_MAIN_MOVE;
+        else if(btn_pressed[3]) P_next = S_MAIN_MOVE;
+        else P_next = S_MAIN_WAIT;
+    S_MAIN_MOVE:
+        P_next = S_MAIN_IDLE;
+    S_MAIN_IDLE:
+        if(cnt==2) P_next = S_MAIN_MOVE;
+        else if(died) P_next = S_MAIN_FINI;
+        else P_next = S_MAIN_IDLE;
+    S_MAIN_FINI:
+        P_next = S_MAIN_FINI;
+    default:
+      P_next = S_MAIN_IDLE;
+  endcase
+end
+
+// ------------------------------------------------------------------------
+
 always @(posedge clk) begin
     cnt <= (cnt<49999999)?cnt+1:0;
     if(cnt==0) slow_clk<=1;
@@ -176,24 +196,60 @@ always @(posedge clk) begin
   end
 end
 
-assign p_x = snake_x_clock[31:20]; // the x position of the right edge of the fish image
-                                // in the 640x480 VGA screen
-assign p_y = snake_y_clock[31:20]; // the x position of the right edge of the fish image
-                                // in the 640x480 VGA screen
+//assign p_x = snake_x_clock[11:0]; // the x position of the right edge of the fish image
+//                                // in the 640x480 VGA screen
+//assign p_y = snake_y_clock[11:0]; // the x position of the right edge of the fish image
+//                                // in the 640x480 VGA screen
 
 always @(posedge slow_clk) begin
   if (~reset_n) begin
-    snake_x_clock[31:20] <= 24;
-    snake_y_clock[31:20] <= 120;
+    snake_x_clock[11:0] <= 96;
+    snake_y_clock[11:0] <= 120;
+    start<=0;
   end
-  else if(dir==0 && x_dir==0)
-    snake_x_clock[31:20] <= (snake_x_clock[31:21]==VBUF_W) ? snake_x_clock[31:20] : snake_x_clock[31:20] + 16;
-  else if(dir==0 && x_dir==1)
-    snake_x_clock[31:20] <= (snake_x_clock[31:21]<SNAKE_W) ? snake_x_clock[31:20] : snake_x_clock[31:20] - 16;
-  else if(dir==1 && y_dir==0)
-    snake_y_clock[31:20] <= (snake_y_clock[31:21]==VBUF_H) ? snake_y_clock[31:20] : snake_y_clock[31:20] + 16;
-  else if(dir==1 && y_dir==1)
-    snake_y_clock[31:20] <= (snake_y_clock[31:21]<SNAKE_H) ? snake_y_clock[31:20] : snake_y_clock[31:20] - 16;
+  else if(P == S_MAIN_WAIT) begin
+    snake_x_clock[11:0] <= 96;
+    snake_y_clock[11:0] <= 120;
+    start<=0;
+  end
+//  else if(P == S_MAIN_MOVE || S_MAIN_IDLE) begin
+//      start<=1;
+//      if(dir==0 && x_dir==0)
+//        snake_x_clock[11:0] <= (snake_x_clock[11:1]>=VBUF_W) ? snake_x_clock[11:0] : snake_x_clock[11:0] + 16;
+//      else if(dir==0 && x_dir==1)
+//        snake_x_clock[11:0] <= (snake_x_clock[11:1]<=SNAKE_W) ? snake_x_clock[11:0] : snake_x_clock[11:0] - 16;
+//      else if(dir==1 && y_dir==0)
+//        snake_y_clock[11:0] <= (snake_y_clock[11:1]>=VBUF_H) ? snake_y_clock[11:0] : snake_y_clock[11:0] + 8;
+//      else if(dir==1 && y_dir==1)
+//        snake_y_clock[11:0] <= (snake_y_clock[11:1]<=SNAKE_H) ? snake_y_clock[11:0] : snake_y_clock[11:0] - 8;
+//  end
+  else if(P == S_MAIN_MOVE || S_MAIN_IDLE) begin
+      start<=1;
+      if(dir==0 && x_dir==0) begin
+        if(snake_x_clock[11:1]>=VBUF_W)
+            start<=0;
+        else
+            snake_x_clock[11:0] <= snake_x_clock[11:0] + 16;
+      end
+      else if(dir==0 && x_dir==1) begin
+        if(snake_x_clock[11:1]<=SNAKE_W)
+            start<=0;
+        else
+            snake_x_clock[11:0] <= snake_x_clock[11:0] - 16;
+      end
+      else if(dir==1 && y_dir==0) begin
+        if(snake_y_clock[11:1]>=VBUF_H)
+            start<=0;
+        else
+            snake_y_clock[11:0] <= snake_y_clock[11:0] + 8;
+      end
+      else if(dir==1 && y_dir==1) begin
+        if(snake_y_clock[11:1]<=SNAKE_H)
+            start<=0;
+        else
+            snake_y_clock[11:0] <= snake_y_clock[11:0] - 8;
+      end
+  end
 end
 
 // End of the animation clock code.
@@ -207,6 +263,69 @@ end
 assign snake_region =
            pixel_y >= (p_y<<1) && pixel_y < (p_y+SNAKE_H)<<1 &&
            (pixel_x + 16) >= p_x && pixel_x < p_x + 1;
+assign snake_region1 =
+           pixel_y >= (p_y1<<1) && pixel_y < (p_y1+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x1 && pixel_x < p_x1 + 1;
+assign snake_region2 =
+           pixel_y >= (p_y2<<1) && pixel_y < (p_y2+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x2 && pixel_x < p_x2 + 1;
+assign snake_region3 =
+           pixel_y >= (p_y3<<1) && pixel_y < (p_y3+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x3 && pixel_x < p_x3 + 1;
+assign snake_region4 =
+           pixel_y >= (p_y4<<1) && pixel_y < (p_y4+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x4 && pixel_x < p_x4 + 1;
+           
+always @ (posedge clk) begin
+  if (~reset_n) begin
+    p_x <= 96;
+    p_y <= 120;
+    p_y1 <= 120;
+    p_y2 <= 120;
+    p_y3 <= 120;
+    p_y4 <= 120;
+    p_x1 <= 80;
+    p_x2 <= 64;
+    p_x3 <= 48;
+    p_x4 <= 32;    
+  end
+  else if(P == S_MAIN_WAIT) begin
+    p_x <= 96;
+    p_y <= 120;
+    p_y1 <= 120;
+    p_y2 <= 120;
+    p_y3 <= 120;
+    p_y4 <= 120;
+    p_x1 <= 80;
+    p_x2 <= 64;
+    p_x3 <= 48;
+    p_x4 <= 32;   
+  end
+  else if(P == S_MAIN_MOVE && start) begin
+    p_x <= snake_x_clock[11:0];
+    p_y <= snake_y_clock[11:0];
+    p_y1 <= p_y;
+    p_y2 <= p_y1;
+    p_y3 <= p_y2;
+    p_y4 <= p_y3;
+    p_x1 <= p_x;
+    p_x2 <= p_x1;
+    p_x3 <= p_x2;
+    p_x4 <= p_x3;
+  end
+  else begin
+    p_x <= p_x;
+    p_y <= p_y;
+    p_y1 <= p_y1;
+    p_y2 <= p_y2;
+    p_y3 <= p_y3;
+    p_y4 <= p_y4;
+    p_x1 <= p_x1;
+    p_x2 <= p_x2;
+    p_x3 <= p_x3;
+    p_x4 <= p_x4;
+  end
+end
 
 always @ (posedge clk) begin
   if (~reset_n) begin
@@ -230,7 +349,15 @@ always @(*) begin
   if (~video_on)
     rgb_next = 12'h000; // Synchronization period, must set RGB values to zero.
   else if(snake_region)
-    rgb_next = 12'h000;
+    rgb_next = 12'h707;
+  else if(snake_region1)
+    rgb_next = 12'h0ff;
+  else if(snake_region2)
+    rgb_next = 12'h707;
+  else if(snake_region3)
+    rgb_next = 12'h0ff;
+  else if(snake_region4)
+    rgb_next = 12'h707;
   else
     rgb_next = data_out; // RGB value at (pixel_x, pixel_y)
 end
