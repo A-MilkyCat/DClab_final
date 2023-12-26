@@ -14,18 +14,21 @@ module lab10(
 
 // Declare system variables
 reg  [12:0] snake_x_clock, snake_y_clock;
-reg [9:0]  p_x, p_y;
-reg [9:0]  p_x1, p_y1;
-reg [9:0]  p_x2, p_y2;
-reg [9:0]  p_x3, p_y3;
-reg [9:0]  p_x4, p_y4;
+reg  [9:0]  p_x, p_y;
+reg  [9:0]  p_x1, p_y1;
+reg  [9:0]  p_x2, p_y2;
+reg  [9:0]  p_x3, p_y3;
+reg  [9:0]  p_x4, p_y4;
+reg  [9:0]  apple_x, apple_y;
 wire        snake_region, snake_region1, snake_region2, snake_region3, snake_region4;
 wire        obstacle1_region;
+wire        black_region;
+wire        apple_region;
 
 // declare SRAM control signals
-wire [16:0] sram_addr;
+wire [16:0] sram_addr, applesram_addr;
 wire [11:0] data_in;
-wire [11:0] data_out;
+wire [11:0] data_out, data_out_apple;
 wire        sram_we, sram_en;
 
 // General VGA control signals
@@ -43,7 +46,7 @@ reg  [11:0] rgb_reg;  // RGB value for the current pixel
 reg  [11:0] rgb_next; // RGB value for the next pixel
   
 // Application-specific VGA signals
-reg  [17:0] pixel_addr;
+reg  [17:0] pixel_addr, apple_addr;
 
 wire [3:0]  btn_level, btn_pressed;
 reg  [3:0]  prev_btn_level;
@@ -62,6 +65,7 @@ reg died, start;
 integer cnt;
 reg slow_clk;
 reg hit;
+wire ob1_right, ob1_left, ob1_down, ob1_up;
 
 // Instiantiate the VGA sync signal generator
 vga_sync vs0(
@@ -105,12 +109,16 @@ debounce btn_db3(
 sram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(VBUF_W*VBUF_H))
   ram0 (.clk(clk), .we(sram_we), .en(sram_en),
           .addr(sram_addr), .data_i(data_in), .data_o(data_out));
+applesram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(64))
+  ram1 (.clk(clk), .we(sram_we), .en(sram_en),
+          .addr(applesram_addr), .data_i(data_in), .data_o(data_out_apple));
 
 assign sram_we = &usr_btn; // In this demo, we do not write the SRAM. However, if
                              // you set 'sram_we' to 0, Vivado fails to synthesize
                              // ram0 as a BRAM -- this is a bug in Vivado.
 assign sram_en = 1;          // Here, we always enable the SRAM block.
 assign sram_addr = pixel_addr;
+assign applesram_addr = apple_addr;
 assign data_in = 12'h000; // SRAM is read-only so we tie inputs to zeros.
 // End of the SRAM memory block.
 // ------------------------------------------------------------------------
@@ -201,6 +209,11 @@ end
 //                                // in the 640x480 VGA screen
 //assign p_y = snake_y_clock[11:0]; // the x position of the right edge of the fish image
 //                                // in the 640x480 VGA screen
+assign ob1_right = ((snake_x_clock[11:0]==80) || (snake_x_clock[11:0]==(5+8+4)*16)) && (snake_y_clock[11:0] >= 40) && (snake_y_clock[11:0] < (40+64));
+assign ob1_left = ((snake_x_clock[11:0]==(5+8+1)*16) || (snake_x_clock[11:0]==(5+8+4+8+1)*16)) && (snake_y_clock[11:0] >= 40) && (snake_y_clock[11:0] < (40+64));
+assign ob1_down = (snake_y_clock[11:0]==32) && ((snake_x_clock[11:0] >= 96 && snake_x_clock[11:0] <= (5+8)*16) || (snake_x_clock[11:0] >= (5+8+4+1)*16 && snake_x_clock[11:0] <= (5+8+4+8)*16));
+assign ob1_up = (snake_y_clock[11:0]==(5+8)*8) && ((snake_x_clock[11:0] >= 96 && snake_x_clock[11:0] <= (5+8)*16) || (snake_x_clock[11:0] >= (5+8+4+1)*16 && snake_x_clock[11:0] <= (5+8+4+8)*16));
+
 
 always @(posedge slow_clk) begin
   if (~reset_n) begin
@@ -232,7 +245,7 @@ always @(posedge slow_clk) begin
       if(dir==0 && x_dir==0) begin
         if(snake_x_clock[11:1]>=VBUF_W)
             start<=0;
-        else if((snake_x_clock[11:1]==40) || (snake_x_clock[11:1]==(5+8+4)*8) && snake_y_clock[11:0] >= (40) && snake_y_clock[11:0] < (40+64))
+        else if(ob1_right)
             hit<=0;
         else
             snake_x_clock[11:0] <= snake_x_clock[11:0] + 16;
@@ -240,18 +253,24 @@ always @(posedge slow_clk) begin
       else if(dir==0 && x_dir==1) begin
         if(snake_x_clock[11:1]<=SNAKE_W)
             start<=0;
+        else if(ob1_left)
+            hit<=0;
         else
             snake_x_clock[11:0] <= snake_x_clock[11:0] - 16;
       end
       else if(dir==1 && y_dir==0) begin
         if(snake_y_clock[11:0]>=VBUF_H-8)
             start<=0;
+        else if(ob1_down)
+            hit<=0;
         else
             snake_y_clock[11:0] <= snake_y_clock[11:0] + 8;
       end
       else if(dir==1 && y_dir==1) begin
         if(snake_y_clock[11:1]<=0)
             start<=0;
+        else if(ob1_up)
+            hit<=0;
         else
             snake_y_clock[11:0] <= snake_y_clock[11:0] - 8;
       end
@@ -286,6 +305,8 @@ assign obstacle1_region =
            (pixel_x) >= 80 && pixel_x < (5+8) * 16) ||
            (pixel_y >= (40<<1) && pixel_y < (40+64)<<1 &&
            (pixel_x) >= (5+8+4)*16 && pixel_x < (5+8+8+4) * 16);
+assign black_region = (pixel_x >= 480);
+assign apple_region = pixel_y >= (apple_y<<1) && pixel_y < ((apple_y+8)<<1) && (pixel_x) >= (apple_x<<1) && pixel_x < ((apple_x+8)<<1);
            
 always @ (posedge clk) begin
   if (~reset_n) begin
@@ -347,7 +368,32 @@ always @ (posedge clk) begin
     // (pixel_x, pixel_y) ranges from (0,0) to (639, 479)
     pixel_addr <= (pixel_y >> 1) * VBUF_W + (pixel_x >> 1);
 end
+always @ (posedge clk) begin
+  if (~reset_n) 
+    apple_addr <= 0;
+  else if(apple_region)
+    apple_addr <= ((pixel_y>>1)-apple_y)*8 + ((pixel_x+8-apple_x)>>1);
+  else 
+    apple_addr <= 0;
+end
 // End of the AGU code.
+// ------------------------------------------------------------------------
+// ------------------------------------------------------------------------
+//apple
+always @(posedge clk) begin
+    if(~reset_n) begin
+        apple_x <= 120;
+        apple_y <= 120;
+    end
+    else if(P == S_MAIN_WAIT) begin
+        apple_x <= 120;
+        apple_y <= 120;
+    end
+    else begin
+        apple_x <= apple_x;
+        apple_y <= apple_y;
+    end
+end
 // ------------------------------------------------------------------------
 
 // ------------------------------------------------------------------------
@@ -371,8 +417,10 @@ always @(*) begin
     rgb_next = 12'h0ff;
   else if(snake_region4)
     rgb_next = 12'h707;
+  else if(black_region)
+    rgb_next = 12'h000;
   else
-    rgb_next = data_out; // RGB value at (pixel_x, pixel_y)
+    rgb_next = (apple_region && data_out_apple != 12'h0f0) ? data_out_apple : data_out; // RGB value at (pixel_x, pixel_y)
 end
 // End of the video data display code.
 // ------------------------------------------------------------------------
