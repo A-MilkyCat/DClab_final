@@ -20,6 +20,7 @@ reg  [9:0]  p_x2, p_y2;
 reg  [9:0]  p_x3, p_y3;
 reg  [9:0]  p_x4, p_y4;
 reg  [9:0]  apple_x, apple_y;
+reg  [9:0]  tmp_apple_x, tmp_apple_y;
 wire        snake_region, snake_region1, snake_region2, snake_region3, snake_region4;
 wire        obstacle1_region;
 wire        black_region;
@@ -90,7 +91,8 @@ integer cnt;
 reg slow_clk;
 reg hit;
 wire ob1_right, ob1_left, ob1_down, ob1_up;
-
+wire apple_right, apple_left, apple_up, apple_down;
+wire apple_hit;
 // Instiantiate the VGA sync signal generator
 vga_sync vs0(
   .clk(vga_clk), .reset(~reset_n), .oHS(VGA_HSYNC), .oVS(VGA_VSYNC),
@@ -229,7 +231,6 @@ always @(posedge clk) begin
   else if(btn_pressed[3] && !dir)begin
     y_dir <= 1;
     dir <= 1;
-    now_score <= now_score == 9 ? 0:now_score+1;
   end
 end
 
@@ -241,7 +242,6 @@ assign ob1_right = ((snake_x_clock[11:0]==80) || (snake_x_clock[11:0]==(5+8+4)*1
 assign ob1_left = ((snake_x_clock[11:0]==(5+8+1)*16) || (snake_x_clock[11:0]==(5+8+4+8+1)*16)) && (snake_y_clock[11:0] >= 40) && (snake_y_clock[11:0] < (40+64));
 assign ob1_down = (snake_y_clock[11:0]==32) && ((snake_x_clock[11:0] >= 96 && snake_x_clock[11:0] <= (5+8)*16) || (snake_x_clock[11:0] >= (5+8+4+1)*16 && snake_x_clock[11:0] <= (5+8+4+8)*16));
 assign ob1_up = (snake_y_clock[11:0]==(5+8)*8) && ((snake_x_clock[11:0] >= 96 && snake_x_clock[11:0] <= (5+8)*16) || (snake_x_clock[11:0] >= (5+8+4+1)*16 && snake_x_clock[11:0] <= (5+8+4+8)*16));
-
 
 always @(posedge slow_clk) begin
   if (~reset_n) begin
@@ -415,7 +415,8 @@ always @ (posedge clk) begin
   if (~reset_n) 
     apple_addr <= 0;
   else if(apple_region)
-    apple_addr <= ((pixel_y>>1)-apple_y)*8 + ((pixel_x+8-apple_x)>>1);
+    apple_addr <= ((pixel_y>>1)-apple_y)*8 + ((pixel_x>>1)-apple_x);
+    
   else 
     apple_addr <= 0;
 end
@@ -423,18 +424,27 @@ end
 // ------------------------------------------------------------------------
 // ------------------------------------------------------------------------
 //apple
+integer cntx = 1, cnty = 10;
+always @(posedge clk) begin
+    if (~reset_n) begin
+        cntx <= 1;
+        cnty <= 10;
+    end else begin
+        cntx <= cntx >= 30? 0 : cntx+1;
+        cnty <= cnty >= 16? 0: cnty + 1;
+    end       
+end
+assign apple_hit = (snake_x_clock[11:0]==(apple_x+8)<<1) && (snake_y_clock[11:0] == apple_y);
 always @(posedge clk) begin
     if(~reset_n) begin
         apple_x <= 120;
         apple_y <= 120;
-    end
-    else if(P == S_MAIN_WAIT) begin
-        apple_x <= 120;
-        apple_y <= 120;
-    end
-    else begin
-        apple_x <= apple_x;
-        apple_y <= apple_y;
+        now_score <= 0;
+    end 
+    else if (apple_hit) begin
+        now_score <= now_score == 9 ? 9:now_score+1;
+        apple_x <= cntx*8;
+        apple_y <= cnty*8+108;
     end
 end
 // ------------------------------------------------------------------------
