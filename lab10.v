@@ -431,7 +431,7 @@ always @(posedge clk) begin
         cnty <= 10;
     end else begin
         cntx <= cntx >= 30? 0 : cntx+1;
-        cnty <= cnty >= 16? 0: cnty + 1;
+        cnty <= cnty >= 17? 0: cnty + 1;
     end       
 end
 assign apple_hit = (snake_x_clock[11:0]==(apple_x+8)<<1) && (snake_y_clock[11:0] == apple_y);
@@ -444,7 +444,7 @@ always @(posedge clk) begin
     else if (apple_hit) begin
         now_score <= now_score == 9 ? 9:now_score+1;
         apple_x <= cntx*8;
-        apple_y <= cnty*8+108;
+        apple_y <= cnty*8+104;
     end
 end
 // ------------------------------------------------------------------------
