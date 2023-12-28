@@ -14,20 +14,16 @@ module lab10(
 
 // Declare system variables
 reg  [12:0] snake_x_clock, snake_y_clock;
-reg  [9:0]  p_x, p_y;
-reg  [9:0]  p_x1, p_y1;
-reg  [9:0]  p_x2, p_y2;
-reg  [9:0]  p_x3, p_y3;
-reg  [9:0]  p_x4, p_y4;
+reg  [9:0]  p_x[0:12], p_y[0:12];
 reg  [9:0]  apple_x, apple_y;
-reg  [9:0]  tmp_apple_x, tmp_apple_y;
-wire        snake_region, snake_region1, snake_region2, snake_region3, snake_region4;
-wire        obstacle1_region;
+wire        snake_region[0:12], snake_total_region;
+wire        obstacle1_region, obstacle2_region;
 wire        black_region;
 wire        apple_region;
+wire        win_region, lose_region;
 
 /////////////score parameter
-reg [5:0]   now_score = 0;
+reg [5:0]   now_score = 1;
 wire        score_region;
 wire [16:0] sram_score_addr;
 reg [16:0] score_addr[9:0];
@@ -51,10 +47,11 @@ initial begin
 end
 ////////////
 // declare SRAM control signals
-wire [16:0] sram_addr, applesram_addr;
+wire [16:0] sram_addr, applesram_addr, start_addr, win_addr, lose_addr;
 wire [11:0] data_in;
 wire [11:0] data_out, data_out_apple;
-wire        sram_we, sram_en;
+wire [11:0] start_out, win_out, lose_out;
+wire        sram_we, sram_en, start_en;
 
 // General VGA control signals
 wire vga_clk;         // 50MHz clock for VGA control
@@ -71,7 +68,7 @@ reg  [11:0] rgb_reg;  // RGB value for the current pixel
 reg  [11:0] rgb_next; // RGB value for the next pixel
   
 // Application-specific VGA signals
-reg  [17:0] pixel_addr, apple_addr;
+reg  [17:0] pixel_addr, apple_addr, end_addr;
 
 wire [3:0]  btn_level, btn_pressed;
 reg  [3:0]  prev_btn_level;
@@ -86,12 +83,15 @@ localparam SNAKE_H      = 8; // Height of the fish.
 
 reg [2:0] P, P_next;
 localparam [2:0] S_MAIN_INIT = 0, S_MAIN_WAIT = 1, S_MAIN_MOVE = 2, S_MAIN_IDLE = 3, S_MAIN_FINI = 4;
-reg died, start;
+reg start;
+wire is_win, is_lose;
 integer cnt;
+wire [3:0] length;
 reg slow_clk;
 reg hit;
 wire ob1_right, ob1_left, ob1_down, ob1_up;
-wire apple_right, apple_left, apple_up, apple_down;
+wire ob2_right, ob2_left, ob2_down, ob2_up;
+reg [2:0] ob;
 wire apple_hit;
 // Instiantiate the VGA sync signal generator
 vga_sync vs0(
@@ -141,13 +141,26 @@ applesram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(64))
 score_ram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(SCORE_W*SCORE_H*10))
   ram2 (.clk(clk), .we(sram_we), .en(sram_en),
           .addr(sram_score_addr), .data_i(data_in), .data_o(score_out));
+          
+//start_sram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(10000))
+//  ram3 (.clk(clk), .we(sram_we), .en(sram_en),
+//          .addr(start_addr), .data_i(data_in), .data_o(start_out));
+win_sram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(10000))
+  ram4 (.clk(clk), .we(sram_we), .en(sram_en),
+          .addr(win_addr), .data_i(data_in), .data_o(win_out));
+lose_sram #(.DATA_WIDTH(12), .ADDR_WIDTH(18), .RAM_SIZE(10000))
+  ram5 (.clk(clk), .we(sram_we), .en(sram_en),
+          .addr(lose_addr), .data_i(data_in), .data_o(lose_out));
+
 assign sram_we = &usr_btn; // In this demo, we do not write the SRAM. However, if
                              // you set 'sram_we' to 0, Vivado fails to synthesize
                              // ram0 as a BRAM -- this is a bug in Vivado.
-assign sram_en = 1;          // Here, we always enable the SRAM block.
+assign sram_en = 1; // Here, we always enable the SRAM block.
 assign sram_addr = pixel_addr;
 assign applesram_addr = apple_addr;
 assign sram_score_addr = pixel_score_addr;
+assign win_addr = end_addr;
+assign lose_addr = end_addr;
 assign data_in = 12'h000; // SRAM is read-only so we tie inputs to zeros.
 // End of the SRAM memory block.
 // ------------------------------------------------------------------------
@@ -174,7 +187,8 @@ end
 always @(*) begin // FSM next-state logic
   case (P)
     S_MAIN_INIT:
-        P_next = S_MAIN_WAIT;
+        if(btn_pressed[1] || btn_pressed[2]) P_next = S_MAIN_WAIT;
+        else P_next = S_MAIN_INIT;
     S_MAIN_WAIT:
         if(btn_pressed[0]) P_next = S_MAIN_MOVE;
         else if(btn_pressed[2]) P_next = S_MAIN_MOVE;
@@ -184,7 +198,7 @@ always @(*) begin // FSM next-state logic
         P_next = S_MAIN_IDLE;
     S_MAIN_IDLE:
         if(cnt==2) P_next = S_MAIN_MOVE;
-        else if(died) P_next = S_MAIN_FINI;
+        else if(is_win || is_lose) P_next = S_MAIN_FINI;
         else P_next = S_MAIN_IDLE;
     S_MAIN_FINI:
         P_next = S_MAIN_FINI;
@@ -193,12 +207,27 @@ always @(*) begin // FSM next-state logic
   endcase
 end
 
+assign is_win = (now_score == 10);
+assign is_lose = (now_score == 0);
+// ------------------------------------------------------------------------
+//initial
+always @(posedge clk) begin
+    if(~reset_n) begin
+        ob <= 0;
+    end
+    else if(P == S_MAIN_INIT) begin
+        if(btn_pressed[1])
+            ob <= 1;
+        else if(btn_pressed[2])
+            ob <= 2;
+    end
+end
 // ------------------------------------------------------------------------
 
 always @(posedge clk) begin
-    cnt <= (cnt<49999999)?cnt+1:0;
+    cnt <= (cnt<25000000)?cnt+1:0;
     if(cnt==0) slow_clk<=1;
-    else if(cnt==25000000) slow_clk<=0;
+    else if(cnt==12499999) slow_clk<=0;
 end
 
 always @(posedge clk) begin
@@ -212,6 +241,11 @@ assign btn_pressed = (btn_level & ~prev_btn_level);
 
 always @(posedge clk) begin
   if (~reset_n) begin
+    x_dir <= 0;
+    y_dir <= 0;
+    dir <= 0;
+  end
+  else if(P == S_MAIN_INIT) begin
     x_dir <= 0;
     y_dir <= 0;
     dir <= 0;
@@ -242,6 +276,11 @@ assign ob1_right = ((snake_x_clock[11:0]==80) || (snake_x_clock[11:0]==(5+8+4)*1
 assign ob1_left = ((snake_x_clock[11:0]==(5+8+1)*16) || (snake_x_clock[11:0]==(5+8+4+8+1)*16)) && (snake_y_clock[11:0] >= 40) && (snake_y_clock[11:0] < (40+64));
 assign ob1_down = (snake_y_clock[11:0]==32) && ((snake_x_clock[11:0] >= 96 && snake_x_clock[11:0] <= (5+8)*16) || (snake_x_clock[11:0] >= (5+8+4+1)*16 && snake_x_clock[11:0] <= (5+8+4+8)*16));
 assign ob1_up = (snake_y_clock[11:0]==(5+8)*8) && ((snake_x_clock[11:0] >= 96 && snake_x_clock[11:0] <= (5+8)*16) || (snake_x_clock[11:0] >= (5+8+4+1)*16 && snake_x_clock[11:0] <= (5+8+4+8)*16));
+assign ob2_right = ((snake_x_clock[11:0]==80) || (snake_x_clock[11:0]==(5+8+4)*16)) && (snake_y_clock[11:0] >= 64) && (snake_y_clock[11:0] < (64+16));
+assign ob2_left = ((snake_x_clock[11:0]==(5+8+1)*16) || (snake_x_clock[11:0]==(5+8+4+8+1)*16)) && (snake_y_clock[11:0] >= 64) && (snake_y_clock[11:0] < (64+16));
+assign ob2_down = (snake_y_clock[11:0]==56) && ((snake_x_clock[11:0] >= 96 && snake_x_clock[11:0] <= (5+8)*16) || (snake_x_clock[11:0] >= (5+8+4+1)*16 && snake_x_clock[11:0] <= (5+8+4+8)*16));
+assign ob2_up = (snake_y_clock[11:0]==(8+2)*8) && ((snake_x_clock[11:0] >= 96 && snake_x_clock[11:0] <= (5+8)*16) || (snake_x_clock[11:0] >= (5+8+4+1)*16 && snake_x_clock[11:0] <= (5+8+4+8)*16));
+
 
 always @(posedge slow_clk) begin
   if (~reset_n) begin
@@ -272,32 +311,32 @@ always @(posedge slow_clk) begin
       hit<=1;
       if(dir==0 && x_dir==0) begin
         if(snake_x_clock[11:1]>=VBUF_W)
-            start<=0;
-        else if(ob1_right)
+            hit<=0;
+        else if((ob1_right && ob == 1) || (ob2_right && ob == 2))
             hit<=0;
         else
             snake_x_clock[11:0] <= snake_x_clock[11:0] + 16;
       end
       else if(dir==0 && x_dir==1) begin
         if(snake_x_clock[11:1]<=SNAKE_W)
-            start<=0;
-        else if(ob1_left)
+            hit<=0;
+        else if((ob1_left && ob == 1) || (ob2_left && ob == 2))
             hit<=0;
         else
             snake_x_clock[11:0] <= snake_x_clock[11:0] - 16;
       end
       else if(dir==1 && y_dir==0) begin
         if(snake_y_clock[11:0]>=VBUF_H-8)
-            start<=0;
-        else if(ob1_down)
+            hit<=0;
+        else if((ob1_down && ob == 1) || (ob2_down && ob == 2))
             hit<=0;
         else
             snake_y_clock[11:0] <= snake_y_clock[11:0] + 8;
       end
       else if(dir==1 && y_dir==1) begin
         if(snake_y_clock[11:1]<=0)
-            start<=0;
-        else if(ob1_up)
+            hit<=0;
+        else if((ob1_up && ob == 1) || (ob2_up && ob == 2))
             hit<=0;
         else
             snake_y_clock[11:0] <= snake_y_clock[11:0] - 8;
@@ -307,87 +346,118 @@ end
 
 // End of the animation clock code.
 // ------------------------------------------------------------------------
+assign length = now_score + 4;
+
 
 // ------------------------------------------------------------------------
 // Video frame buffer address generation unit (AGU) with scaling control
 // Note that the width x height of the fish image is 64x32, when scaled-up
 // on the screen, it becomes 128x64. 'pos' specifies the right edge of the
 // fish image.
-assign snake_region =
-           pixel_y >= (p_y<<1) && pixel_y < (p_y+SNAKE_H)<<1 &&
-           (pixel_x + 16) >= p_x && pixel_x < p_x;
-assign snake_region1 =
-           pixel_y >= (p_y1<<1) && pixel_y < (p_y1+SNAKE_H)<<1 &&
-           (pixel_x + 16) >= p_x1 && pixel_x < p_x1;
-assign snake_region2 =
-           pixel_y >= (p_y2<<1) && pixel_y < (p_y2+SNAKE_H)<<1 &&
-           (pixel_x + 16) >= p_x2 && pixel_x < p_x2;
-assign snake_region3 =
-           pixel_y >= (p_y3<<1) && pixel_y < (p_y3+SNAKE_H)<<1 &&
-           (pixel_x + 16) >= p_x3 && pixel_x < p_x3;
-assign snake_region4 =
-           pixel_y >= (p_y4<<1) && pixel_y < (p_y4+SNAKE_H)<<1 &&
-           (pixel_x + 16) >= p_x4 && pixel_x < p_x4;
+assign snake_total_region = snake_region[0] || snake_region[1] || snake_region[2] || snake_region[3] || snake_region[4] || (length>5 && snake_region[5]) ||
+                            (length>6 && snake_region[6]) || (length>7 && snake_region[7]) || (length>8 && snake_region[8]) || (length>9 && snake_region[9]) ||
+                            (length>10 && snake_region[10]) || (length>11 && snake_region[11]) || (length>12 && snake_region[12]) || (length>5 && snake_region[13]);
+assign snake_region[0] =
+           pixel_y >= (p_y[0]<<1) && pixel_y < (p_y[0]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[0] && pixel_x < p_x[0];
+assign snake_region[1] =
+           pixel_y >= (p_y[1]<<1) && pixel_y < (p_y[1]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[1] && pixel_x < p_x[1];
+assign snake_region[2] =
+          pixel_y >= (p_y[2]<<1) && pixel_y < (p_y[2]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[2] && pixel_x < p_x[2];
+assign snake_region[3] =
+           pixel_y >= (p_y[3]<<1) && pixel_y < (p_y[3]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[3] && pixel_x < p_x[3];
+assign snake_region[4] =
+           pixel_y >= (p_y[4]<<1) && pixel_y < (p_y[4]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[4] && pixel_x < p_x[4];
+assign snake_region[5] = length > 5 &&
+           pixel_y >= (p_y[5]<<1) && pixel_y < (p_y[5]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[5] && pixel_x < p_x[5];
+assign snake_region[6] = length > 6 &&
+           pixel_y >= (p_y[6]<<1) && pixel_y < (p_y[6]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[6] && pixel_x < p_x[6];
+assign snake_region[7] = length > 7 &&
+           pixel_y >= (p_y[7]<<1) && pixel_y < (p_y[7]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[7] && pixel_x < p_x[7];
+assign snake_region[8] = length > 8 &&
+           pixel_y >= (p_y[8]<<1) && pixel_y < (p_y[8]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[8] && pixel_x < p_x[8];
+assign snake_region[9] = length > 9 &&
+           pixel_y >= (p_y[9]<<1) && pixel_y < (p_y[9]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[9] && pixel_x < p_x[9];
+assign snake_region[10] = length > 10 &&
+           pixel_y >= (p_y[10]<<1) && pixel_y < (p_y[10]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[10] && pixel_x < p_x[10];
+assign snake_region[11] = length > 11 &&
+           pixel_y >= (p_y[11]<<1) && pixel_y < (p_y[11]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[11] && pixel_x < p_x[11];
+assign snake_region[12] = length > 12 &&
+           pixel_y >= (p_y[12]<<1) && pixel_y < (p_y[12]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[12] && pixel_x < p_x[12];
+assign snake_region[13] = length > 13 &&
+           pixel_y >= (p_y[13]<<1) && pixel_y < (p_y[13]+SNAKE_H)<<1 &&
+           (pixel_x + 16) >= p_x[13] && pixel_x < p_x[13];
 assign obstacle1_region = 
            (pixel_y >= (40<<1) && pixel_y < (40+64)<<1 &&
            (pixel_x) >= 80 && pixel_x < (5+8) * 16) ||
            (pixel_y >= (40<<1) && pixel_y < (40+64)<<1 &&
+           (pixel_x) >= (5+8+4)*16 && pixel_x < (5+8+8+4) * 16);
+assign obstacle2_region = 
+           (pixel_y >= (64<<1) && pixel_y < (64+16)<<1 &&
+           (pixel_x) >= 80 && pixel_x < (5+8) * 16) ||
+           (pixel_y >= (64<<1) && pixel_y < (64+16)<<1 &&
            (pixel_x) >= (5+8+4)*16 && pixel_x < (5+8+8+4) * 16);
 assign black_region = (pixel_x >= 480);
 assign apple_region = pixel_y >= (apple_y<<1) && pixel_y < ((apple_y+8)<<1) && (pixel_x) >= (apple_x<<1) && pixel_x < ((apple_x+8)<<1);
 assign score_region = 
             (pixel_y >= (SCORE_ORIGY<<1) && pixel_y < (SCORE_ORIGY+SCORE_H)<<1 &&
            (pixel_x) >= 480 && pixel_x < 580);
+assign win_region = (pixel_y >= 70<<1) && pixel_y < (170)<<1 && (pixel_x) >= 140 && pixel_x < 340;
+assign lose_region = (pixel_y >= 70<<1) && pixel_y < (170)<<1 && (pixel_x) >= 140 && pixel_x < 340;
+integer j;
 always @ (posedge clk) begin
   if (~reset_n) begin
-    p_x <= 96;
-    p_y <= 120;
-    p_y1 <= 120;
-    p_y2 <= 120;
-    p_y3 <= 120;
-    p_y4 <= 120;
-    p_x1 <= 80;
-    p_x2 <= 64;
-    p_x3 <= 48;
-    p_x4 <= 32;    
+    p_x[0] <= 96;
+    p_y[0] <= 120;
+    p_y[1] <= 120;
+    p_y[2] <= 120;
+    p_y[3] <= 120;
+    p_y[4] <= 120;
+    p_x[1] <= 80;
+    p_x[2] <= 64;
+    p_x[3] <= 48;
+    p_x[4] <= 32;    
   end
   else if(P == S_MAIN_WAIT) begin
-    p_x <= 96;
-    p_y <= 120;
-    p_y1 <= 120;
-    p_y2 <= 120;
-    p_y3 <= 120;
-    p_y4 <= 120;
-    p_x1 <= 80;
-    p_x2 <= 64;
-    p_x3 <= 48;
-    p_x4 <= 32;   
+    p_x[0] <= 96;
+    p_y[0] <= 120;
+    p_y[1] <= 120;
+    p_y[2] <= 120;
+    p_y[3] <= 120;
+    p_y[4] <= 120;
+    p_x[1] <= 80;
+    p_x[2] <= 64;
+    p_x[3] <= 48;
+    p_x[4] <= 32;   
   end
   else if(P == S_MAIN_MOVE && start && hit) begin
-    p_x <= snake_x_clock[11:0];
-    p_y <= snake_y_clock[11:0];
-    p_y1 <= p_y;
-    p_y2 <= p_y1;
-    p_y3 <= p_y2;
-    p_y4 <= p_y3;
-    p_x1 <= p_x;
-    p_x2 <= p_x1;
-    p_x3 <= p_x2;
-    p_x4 <= p_x3;
+    p_x[0] <= snake_x_clock[11:0];
+    p_y[0] <= snake_y_clock[11:0];
+    for(j=1;j<length;j=j+1) begin
+        p_x[j] <= p_x[j-1];
+        p_y[j] <= p_y[j-1];
+    end
   end
   else begin
-    p_x <= p_x;
-    p_y <= p_y;
-    p_y1 <= p_y1;
-    p_y2 <= p_y2;
-    p_y3 <= p_y3;
-    p_y4 <= p_y4;
-    p_x1 <= p_x1;
-    p_x2 <= p_x2;
-    p_x3 <= p_x3;
-    p_x4 <= p_x4;
+    for(j=0;j<length;j=j+1) begin
+        p_x[j] <= p_x[j];
+        p_y[j] <= p_y[j];
+    end
   end
 end
+
 
 always @ (posedge clk) begin
   if (~reset_n) begin
@@ -405,7 +475,7 @@ always @ (posedge clk) begin
   else if (score_region)
     // Scale up a 320x240 image for the 640x480 display.
     // (pixel_x, pixel_y) ranges from (0,0) to (639, 479)
-    pixel_score_addr <= score_addr[now_score] +
+    pixel_score_addr <= score_addr[now_score>=10?9:now_score] +
                       ((pixel_y>>1)-SCORE_ORIGY)*SCORE_W +
                       ((pixel_x +SCORE_W-SCORE_ORIGX)>>1);
   else
@@ -416,22 +486,18 @@ always @ (posedge clk) begin
     apple_addr <= 0;
   else if(apple_region)
     apple_addr <= ((pixel_y>>1)-apple_y)*8 + ((pixel_x>>1)-apple_x);
-    
   else 
     apple_addr <= 0;
 end
-// End of the AGU code.
-// ------------------------------------------------------------------------
-// ------------------------------------------------------------------------
-//apple
 integer cntx = 1, cnty = 10;
 always @(posedge clk) begin
     if (~reset_n) begin
         cntx <= 1;
         cnty <= 10;
-    end else begin
-        cntx <= cntx >= 30? 0 : cntx+1;
-        cnty <= cnty >= 17? 0: cnty + 1;
+    end 
+    else begin
+        cntx <= cntx >= 30? 1 : cntx+1;
+        cnty <= cnty >= 17? 1:  cnty+1;
     end       
 end
 assign apple_hit = (snake_x_clock[11:0]==(apple_x+8)<<1) && (snake_y_clock[11:0] == apple_y);
@@ -439,14 +505,34 @@ always @(posedge clk) begin
     if(~reset_n) begin
         apple_x <= 120;
         apple_y <= 120;
+        now_score <= 1;
+    end
+    if(P == S_MAIN_INIT) begin
+        apple_x <= 120;
+        apple_y <= 120;
+        now_score <= 1;
+    end
+    else if(!hit && start && (P == S_MAIN_IDLE || P == S_MAIN_MOVE)) begin
         now_score <= 0;
-    end 
-    else if (apple_hit) begin
-        now_score <= now_score == 9 ? 9:now_score+1;
+    end
+    else if (apple_hit && P == S_MAIN_IDLE) begin
+        now_score <= now_score+1;
         apple_x <= cntx*8;
         apple_y <= cnty*8+104;
     end
 end
+always @ (posedge clk) begin
+  if (~reset_n) 
+    end_addr <= 0;
+  else if(win_region)
+    end_addr <= ((pixel_y >> 1) -70) * 100 + ((pixel_x >> 1)-70);
+  else 
+    end_addr <= 0;
+end
+// End of the AGU code.
+// ------------------------------------------------------------------------
+// ------------------------------------------------------------------------
+
 // ------------------------------------------------------------------------
 
 // ------------------------------------------------------------------------
@@ -455,21 +541,24 @@ always @(posedge clk) begin
   if (pixel_tick) rgb_reg <= rgb_next;
 end
 
+integer k;
 always @(*) begin
   if (~video_on)
     rgb_next = 12'h000; // Synchronization period, must set RGB values to zero.
-  else if(obstacle1_region)
+  else if(P == S_MAIN_INIT && ~black_region)
+    rgb_next = 12'h777;
+  else if(P == S_MAIN_FINI && is_win && win_region)
+    rgb_next = win_out;
+  else if(P == S_MAIN_FINI && is_lose && lose_region)
+    rgb_next = lose_out;
+  else if((obstacle1_region && ob == 1) || (obstacle2_region && ob == 2))
     rgb_next = 12'h000;
-  else if(snake_region)
-    rgb_next = 12'h707;
-  else if(snake_region1)
-    rgb_next = 12'h0ff;
-  else if(snake_region2)
-    rgb_next = 12'h707;
-  else if(snake_region3)
-    rgb_next = 12'h0ff;
-  else if(snake_region4)
-    rgb_next = 12'h707;
+  else if(snake_total_region) begin
+    for(k=0;k<length;k=k+1) begin
+        if(snake_region[k])
+            rgb_next = (k%2==0) ? 12'h707 : 12'h0ff;
+    end
+  end
   else if(black_region)
     //rgb_next = 12'h000;
     rgb_next = (score_region && score_out != 12'h0f0) ? score_out : 12'h000;
